@@ -205,8 +205,44 @@ function saveConfig(config) {
 import { createInterface } from "readline";
 
 // src/agent/prompts/system.ts
-function getSystemPrompt(cwd, projectContext, userName) {
+function getSystemPrompt(cwd, projectContext, userName, textToolMode = false) {
   const userRef = userName ? `The user's name is ${userName}. ` : "";
+  const toolInstructions = textToolMode ? `
+## How to Use Tools
+You have access to these tools. To use them, output a tool call block in EXACTLY this format:
+
+<tool_call>
+{"name": "tool_name", "arguments": {"arg1": "value1"}}
+</tool_call>
+
+Available tools:
+
+1. **file_write** \u2014 Create or overwrite a file
+   <tool_call>
+   {"name": "file_write", "arguments": {"path": "hello.js", "content": "console.log('hello');"}}
+   </tool_call>
+
+2. **file_read** \u2014 Read a file's contents
+   <tool_call>
+   {"name": "file_read", "arguments": {"path": "package.json"}}
+   </tool_call>
+
+3. **file_list** \u2014 List files in a directory
+   <tool_call>
+   {"name": "file_list", "arguments": {"path": ".", "depth": 3}}
+   </tool_call>
+
+4. **shell_exec** \u2014 Run a shell command
+   <tool_call>
+   {"name": "shell_exec", "arguments": {"command": "npm install express"}}
+   </tool_call>
+
+IMPORTANT RULES:
+- You MUST use <tool_call> blocks to take action. Do NOT just describe what to do.
+- You can use multiple tool calls in one response.
+- After I show you the tool results, continue your work or respond to the user.
+- The JSON inside <tool_call> must be valid JSON on a single line or multiple lines.
+` : "";
   return `You are ZeroDroid, an open-source AI coding agent. You help users build complete software projects \u2014 websites, APIs, mobile apps, scripts, and anything else \u2014 directly from the terminal.
 
 ${userRef}You are currently working in: ${cwd}
@@ -219,7 +255,7 @@ ${userRef}You are currently working in: ${cwd}
 - Build complete projects from scratch
 - Debug and fix errors
 - Manage git repositories
-
+${toolInstructions}
 ## Rules
 1. ALWAYS use tools to take action. Never just describe what you would do \u2014 DO IT.
 2. When creating a project, create ALL necessary files (package.json, config files, source code, etc.)
@@ -635,24 +671,74 @@ async function runAgent(userPrompt, options) {
   messages.push({ role: "user", content: userPrompt });
   let iterations = 0;
   let finalResponse = "";
+  let useTextTools = false;
+  if (provider.name === "ollama") {
+    try {
+      await provider.complete({
+        messages: [{ role: "user", content: "hi" }],
+        tools: TOOL_DEFINITIONS,
+        temperature: 0,
+        maxTokens: 10
+      });
+    } catch {
+      useTextTools = true;
+      log.dim("Using text-based tool mode (model doesn't support native tools)");
+      messages[0] = {
+        role: "system",
+        content: getSystemPrompt(cwd, projectContext, config.userName, true)
+      };
+    }
+  }
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations++;
     try {
       const result = await provider.complete({
         messages,
-        tools: TOOL_DEFINITIONS,
+        tools: useTextTools ? void 0 : TOOL_DEFINITIONS,
         temperature: 0.4,
         maxTokens: 8192
       });
-      if (result.content) {
+      const content = result.content || "";
+      if (useTextTools && content) {
+        const textToolCalls = parseTextToolCalls(content);
+        if (textToolCalls.length > 0) {
+          const cleanText = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "").trim();
+          if (cleanText) {
+            log.blank();
+            log.ai(cleanText);
+          }
+          log.blank();
+          const toolResultTexts = [];
+          for (const tc of textToolCalls) {
+            const toolResult = executeTool(tc.name, tc.arguments, cwd);
+            toolResultTexts.push(`[Tool: ${tc.name}] Result:
+${toolResult}`);
+          }
+          messages.push({ role: "assistant", content });
+          messages.push({
+            role: "user",
+            content: `Tool results:
+${toolResultTexts.join("\n\n")}
+
+Continue your work based on these results. Use more tool calls if needed, or respond to the user if done.`
+          });
+          finalResponse = cleanText || content;
+          continue;
+        }
         log.blank();
-        log.ai(result.content);
-        finalResponse = result.content;
+        log.ai(content);
+        finalResponse = content;
+        break;
+      }
+      if (content) {
+        log.blank();
+        log.ai(content);
+        finalResponse = content;
       }
       if (result.toolCalls && result.toolCalls.length > 0) {
         messages.push({
           role: "assistant",
-          content: result.content || "",
+          content,
           tool_calls: result.toolCalls
         });
         log.blank();
@@ -684,6 +770,36 @@ async function runAgent(userPrompt, options) {
   } catch {
   }
   return finalResponse;
+}
+function parseTextToolCalls(text) {
+  const calls = [];
+  const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const jsonStr = match[1].trim();
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (parsed.name && parsed.arguments) {
+        calls.push({
+          name: parsed.name,
+          arguments: parsed.arguments
+        });
+      }
+    } catch {
+      try {
+        const nameMatch = jsonStr.match(/"name"\s*:\s*"([^"]+)"/);
+        const argsMatch = jsonStr.match(/"arguments"\s*:\s*(\{[\s\S]*\})/);
+        if (nameMatch && argsMatch) {
+          calls.push({
+            name: nameMatch[1],
+            arguments: JSON.parse(argsMatch[1])
+          });
+        }
+      } catch {
+      }
+    }
+  }
+  return calls;
 }
 function detectTechStack(messages, memory) {
   if (!memory) return;
@@ -1930,10 +2046,11 @@ function createCLI() {
           name: "model",
           message: "Select Ollama model:",
           choices: [
-            { name: "\u26A1 gemma4:e2b  \u2014 Fast, lightweight (3-4 GB RAM)", value: "gemma4:e2b" },
-            { name: "\u{1F9E0} gemma4:e4b  \u2014 Smarter, heavier (5-6 GB RAM)", value: "gemma4:e4b" },
-            { name: "\u{1F999} llama3.2:3b \u2014 Meta Llama 3B (3-4 GB RAM)", value: "llama3.2:3b" },
-            { name: "\u{1F4DD} qwen2.5:3b  \u2014 Qwen 3B coding (3-4 GB RAM)", value: "qwen2.5:3b" },
+            { name: "\u26A1 gemma4:e2b   \u2014 Fast, lightweight (3-4 GB RAM)", value: "gemma4:e2b" },
+            { name: "\u{1F9E0} gemma4:e4b   \u2014 Smarter, heavier (5-6 GB RAM)", value: "gemma4:e4b" },
+            { name: "\u{1F999} llama3.2:3b  \u2014 Meta Llama 3B, tool-calling (3 GB RAM)", value: "llama3.2:3b" },
+            { name: "\u{1FAB6} llama3.2:1b  \u2014 Ultra-light 1B, won't crash (1.5 GB RAM)", value: "llama3.2:1b" },
+            { name: "\u{1F4DD} qwen2.5:3b   \u2014 Qwen 3B coding (3-4 GB RAM)", value: "qwen2.5:3b" },
             { name: "\u{1F527} Custom model (enter name)", value: "__custom__" }
           ],
           default: config.ollama.model

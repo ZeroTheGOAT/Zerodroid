@@ -126,42 +126,104 @@ export async function runAgent(
   let iterations = 0;
   let finalResponse = '';
 
+  // Auto-detect: does this provider/model support native tool calling?
+  // If not, use text-based tool parsing (works with ANY model)
+  let useTextTools = false;
+
+  if (provider.name === 'ollama') {
+    try {
+      // Quick test: send with tools and see if it errors
+      await provider.complete({
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: TOOL_DEFINITIONS,
+        temperature: 0,
+        maxTokens: 10,
+      });
+    } catch {
+      // Model doesn't support native tool calling — switch to text mode
+      useTextTools = true;
+      log.dim('Using text-based tool mode (model doesn\'t support native tools)');
+
+      // Rebuild system prompt with text-tool instructions
+      messages[0] = {
+        role: 'system',
+        content: getSystemPrompt(cwd, projectContext, config.userName, true),
+      };
+    }
+  }
+
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations++;
 
     try {
-      // Call the AI with tools
+      // Call the AI — with or without native tools
       const result = await provider.complete({
         messages,
-        tools: TOOL_DEFINITIONS,
+        tools: useTextTools ? undefined : TOOL_DEFINITIONS,
         temperature: 0.4,
         maxTokens: 8192,
       });
 
-      // If the AI responded with text content, display it
-      if (result.content) {
+      const content = result.content || '';
+
+      // ─── TEXT-BASED TOOL MODE ──────────────────────────
+      if (useTextTools && content) {
+        // Parse <tool_call> blocks from the response text
+        const textToolCalls = parseTextToolCalls(content);
+
+        if (textToolCalls.length > 0) {
+          // Show the text content (minus tool call blocks) as AI thinking
+          const cleanText = content
+            .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+            .trim();
+          if (cleanText) {
+            log.blank();
+            log.ai(cleanText);
+          }
+
+          // Execute parsed tool calls
+          log.blank();
+          const toolResultTexts: string[] = [];
+          for (const tc of textToolCalls) {
+            const toolResult = executeTool(tc.name, tc.arguments, cwd);
+            toolResultTexts.push(`[Tool: ${tc.name}] Result:\n${toolResult}`);
+          }
+
+          // Add to conversation for the next iteration
+          messages.push({ role: 'assistant', content });
+          messages.push({
+            role: 'user',
+            content: `Tool results:\n${toolResultTexts.join('\n\n')}\n\nContinue your work based on these results. Use more tool calls if needed, or respond to the user if done.`,
+          });
+
+          finalResponse = cleanText || content;
+          continue;
+        }
+
+        // No tool calls in text — just a normal response
         log.blank();
-        log.ai(result.content);
-        finalResponse = result.content;
+        log.ai(content);
+        finalResponse = content;
+        break;
       }
 
-      // If the AI wants to call tools
+      // ─── NATIVE TOOL MODE ─────────────────────────────
+      if (content) {
+        log.blank();
+        log.ai(content);
+        finalResponse = content;
+      }
+
       if (result.toolCalls && result.toolCalls.length > 0) {
-        // Add assistant message with tool calls to conversation
         messages.push({
           role: 'assistant',
-          content: result.content || '',
+          content: content,
           tool_calls: result.toolCalls,
         });
 
-        // Execute all tool calls
         log.blank();
         const toolResults = processToolCalls(result.toolCalls, cwd);
-
-        // Add tool results to conversation
         messages.push(...toolResults);
-
-        // Continue the loop — let AI process the results
         continue;
       }
 
@@ -198,6 +260,56 @@ export async function runAgent(
   }
 
   return finalResponse;
+}
+
+/**
+ * Parse <tool_call> blocks from AI text output
+ * This enables tool usage for models that don't support native tool calling API
+ *
+ * Format:
+ *   <tool_call>
+ *   {"name": "file_write", "arguments": {"path": "test.js", "content": "..."}}
+ *   </tool_call>
+ */
+interface TextToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+function parseTextToolCalls(text: string): TextToolCall[] {
+  const calls: TextToolCall[] = [];
+  const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    const jsonStr = match[1].trim();
+    try {
+      const parsed = JSON.parse(jsonStr) as { name?: string; arguments?: Record<string, unknown> };
+      if (parsed.name && parsed.arguments) {
+        calls.push({
+          name: parsed.name,
+          arguments: parsed.arguments,
+        });
+      }
+    } catch {
+      // Try to be lenient — maybe the JSON is slightly malformed
+      // Attempt to extract name and arguments manually
+      try {
+        const nameMatch = jsonStr.match(/"name"\s*:\s*"([^"]+)"/);
+        const argsMatch = jsonStr.match(/"arguments"\s*:\s*(\{[\s\S]*\})/);
+        if (nameMatch && argsMatch) {
+          calls.push({
+            name: nameMatch[1],
+            arguments: JSON.parse(argsMatch[1]),
+          });
+        }
+      } catch {
+        // Skip unparseable tool calls
+      }
+    }
+  }
+
+  return calls;
 }
 
 /**

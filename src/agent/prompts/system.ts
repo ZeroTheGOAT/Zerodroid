@@ -1,12 +1,59 @@
 /**
  * System Prompt & Tool Definitions
  * The brain of ZeroDroid — instructs the AI how to be a coding agent
+ *
+ * TWO MODES:
+ *   1. Native tool calling (Gemini, GPT, large Ollama models)
+ *   2. Text-based tool parsing (small Ollama models that don't support tools API)
  */
 
 import type { ToolDefinition } from '../providers/base.js';
 
-export function getSystemPrompt(cwd: string, projectContext?: string, userName?: string): string {
+/**
+ * Get the system prompt — includes text-based tool instructions
+ * for models that don't support native function calling
+ */
+export function getSystemPrompt(cwd: string, projectContext?: string, userName?: string, textToolMode = false): string {
   const userRef = userName ? `The user's name is ${userName}. ` : '';
+
+  const toolInstructions = textToolMode
+    ? `
+## How to Use Tools
+You have access to these tools. To use them, output a tool call block in EXACTLY this format:
+
+<tool_call>
+{"name": "tool_name", "arguments": {"arg1": "value1"}}
+</tool_call>
+
+Available tools:
+
+1. **file_write** — Create or overwrite a file
+   <tool_call>
+   {"name": "file_write", "arguments": {"path": "hello.js", "content": "console.log('hello');"}}
+   </tool_call>
+
+2. **file_read** — Read a file's contents
+   <tool_call>
+   {"name": "file_read", "arguments": {"path": "package.json"}}
+   </tool_call>
+
+3. **file_list** — List files in a directory
+   <tool_call>
+   {"name": "file_list", "arguments": {"path": ".", "depth": 3}}
+   </tool_call>
+
+4. **shell_exec** — Run a shell command
+   <tool_call>
+   {"name": "shell_exec", "arguments": {"command": "npm install express"}}
+   </tool_call>
+
+IMPORTANT RULES:
+- You MUST use <tool_call> blocks to take action. Do NOT just describe what to do.
+- You can use multiple tool calls in one response.
+- After I show you the tool results, continue your work or respond to the user.
+- The JSON inside <tool_call> must be valid JSON on a single line or multiple lines.
+`
+    : '';
 
   return `You are ZeroDroid, an open-source AI coding agent. You help users build complete software projects — websites, APIs, mobile apps, scripts, and anything else — directly from the terminal.
 
@@ -20,7 +67,7 @@ ${userRef}You are currently working in: ${cwd}
 - Build complete projects from scratch
 - Debug and fix errors
 - Manage git repositories
-
+${toolInstructions}
 ## Rules
 1. ALWAYS use tools to take action. Never just describe what you would do — DO IT.
 2. When creating a project, create ALL necessary files (package.json, config files, source code, etc.)
