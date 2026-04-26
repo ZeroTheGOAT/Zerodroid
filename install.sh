@@ -81,7 +81,8 @@ npm install -g github:ZeroTheGOAT/Zerodroid 2>/dev/null || {
   cd "$INSTALL_DIR"
   npm install
   npm run build
-  npm install -g .
+  npm pack > /dev/null
+  npm install -g *.tgz
   cd - > /dev/null
   rm -rf "$INSTALL_DIR"
 }
