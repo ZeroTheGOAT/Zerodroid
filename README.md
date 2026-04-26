@@ -41,6 +41,9 @@ zerodroid chat
 
 # Check your environment
 zerodroid setup
+
+# Completely uninstall and delete downloaded models
+zerodroid uninstall
 ```
 
 ---

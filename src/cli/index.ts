@@ -181,6 +181,98 @@ export function createCLI(): Command {
       log.dim('Resume with: zerodroid --continue  or  zerodroid --resume <id>');
     });
 
+  // ─── zerodroid uninstall ─────────────────────────────
+  program
+    .command('uninstall')
+    .description('Completely remove ZeroDroid, config, memory, and models')
+    .action(async () => {
+      log.brand('ZeroDroid Uninstaller');
+      log.blank();
+
+      const inquirer = await import('inquirer');
+
+      log.info('Ollama models are typically stored in:');
+      log.dim('  Termux: ~/.ollama/models  or  $PREFIX/var/lib/ollama/models');
+      log.dim('  Linux/Mac: ~/.ollama/models');
+      log.blank();
+
+      const { removeModels } = await inquirer.default.prompt([
+        {
+          type: 'confirm',
+          name: 'removeModels',
+          message: 'Do you want to delete ALL downloaded Ollama models to free up space?',
+          default: false,
+        },
+      ]);
+
+      if (removeModels) {
+        log.step('Removing', 'Ollama models...');
+        try {
+          const { execSync } = await import('child_process');
+          const modelsOutput = execSync('ollama list', { encoding: 'utf-8' });
+          const lines = modelsOutput.split('\n').slice(1); // skip header
+          
+          let deleted = 0;
+          for (const line of lines) {
+            const name = line.split(/\s+/)[0];
+            if (name) {
+              log.dim(`  Deleting ${name}...`);
+              execSync(`ollama rm ${name}`, { stdio: 'ignore' });
+              deleted++;
+            }
+          }
+          log.success(`Deleted ${deleted} models.`);
+        } catch (e) {
+          log.warn('Could not list/remove models automatically. Make sure Ollama is running.');
+          log.dim('You can delete them manually with: ollama rm <model-name>');
+        }
+      }
+
+      log.blank();
+      const { confirmUninstall } = await inquirer.default.prompt([
+        {
+          type: 'confirm',
+          name: 'confirmUninstall',
+          message: 'Are you sure you want to completely uninstall ZeroDroid and delete all your chat history/memory?',
+          default: false,
+        },
+      ]);
+
+      if (!confirmUninstall) {
+        log.info('Uninstall cancelled.');
+        return;
+      }
+
+      log.blank();
+      log.step('Removing', 'ZeroDroid memory and configuration...');
+      try {
+        const { rmSync } = await import('fs');
+        const { homedir } = await import('os');
+        const { join } = await import('path');
+        const configDir = join(homedir(), '.zerodroid');
+        rmSync(configDir, { recursive: true, force: true });
+        log.success('Deleted ~/.zerodroid');
+      } catch (e) {
+        log.warn('Could not delete ~/.zerodroid automatically.');
+      }
+
+      log.step('Removing', 'Wrapper script (if exists)...');
+      try {
+        const { rmSync } = await import('fs');
+        const { homedir } = await import('os');
+        const { join } = await import('path');
+        rmSync(join(homedir(), '.local', 'bin', 'zerodroid'), { force: true });
+      } catch (e) {}
+
+      log.step('Removing', 'ZeroDroid CLI from npm...');
+      console.log('');
+      console.log('\x1b[33mTo finish uninstalling, please run this exact command:\x1b[0m');
+      console.log('\x1b[1m  npm uninstall -g zerodroid\x1b[0m');
+      console.log('');
+      log.brand('Goodbye! 👋');
+      process.exit(0);
+    });
+
   // ─── zerodroid setup ─────────────────────────────────
   program
     .command('setup')
