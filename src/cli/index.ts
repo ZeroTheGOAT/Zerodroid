@@ -326,13 +326,39 @@ export function createCLI(): Command {
       } else {
         const ollamaAnswer = await inquirer.default.prompt([
           {
-            type: 'input',
+            type: 'list',
             name: 'model',
-            message: 'Ollama model name:',
+            message: 'Select Ollama model:',
+            choices: [
+              { name: '⚡ gemma4:e2b  — Fast, lightweight (3-4 GB RAM)', value: 'gemma4:e2b' },
+              { name: '🧠 gemma4:e4b  — Smarter, heavier (5-6 GB RAM)', value: 'gemma4:e4b' },
+              { name: '🦙 llama3.2:3b — Meta Llama 3B (3-4 GB RAM)', value: 'llama3.2:3b' },
+              { name: '📝 qwen2.5:3b  — Qwen 3B coding (3-4 GB RAM)', value: 'qwen2.5:3b' },
+              { name: '🔧 Custom model (enter name)', value: '__custom__' },
+            ],
             default: config.ollama.model,
           },
         ]);
-        config.ollama.model = ollamaAnswer.model;
+
+        if (ollamaAnswer.model === '__custom__') {
+          const customModel = await inquirer.default.prompt([
+            {
+              type: 'input',
+              name: 'name',
+              message: 'Enter model name (e.g., gemma3:1b):',
+              default: config.ollama.model,
+            },
+          ]);
+          config.ollama.model = customModel.name;
+        } else {
+          config.ollama.model = ollamaAnswer.model;
+        }
+
+        log.blank();
+        log.dim('💡 Switch models anytime:');
+        log.dim('   zerodroid config --set ollama.model=gemma4:e2b');
+        log.dim('   zerodroid config --set ollama.model=gemma4:e4b');
+        log.dim('   Or in chat: /model gemma4:e4b');
       }
 
       // Ask for user name
