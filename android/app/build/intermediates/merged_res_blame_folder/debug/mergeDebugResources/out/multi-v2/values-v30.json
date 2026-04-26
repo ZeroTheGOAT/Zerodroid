@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.zerodroid.app-mergeDebugResources-60:/values-v30/values-v30.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\harih\\.gradle\\caches\\8.13\\transforms\\0c14bed6d2327f86ae87043102c476f6\\transformed\\material3-release\\res\\values-v30\\values-v30.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "72",
+                        "endOffsets": "123"
+                    }
+                }
+            ]
+        }
+    ]
+}
