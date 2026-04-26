@@ -8,6 +8,7 @@
  */
 
 import { spawn, execSync } from 'child_process';
+import { totalmem } from 'os';
 import type {
   AIProvider,
   CompletionOptions,
@@ -23,9 +24,38 @@ export class OllamaProvider implements AIProvider {
   private host: string;
   private model: string;
 
+  /**
+   * Context window size — THIS IS THE KEY TO MOBILE PERFORMANCE
+   * Default Gemma4 context is 128K which allocates GIGABYTES of KV cache RAM.
+   * On mobile (12GB), that alone causes OOM crashes.
+   * We limit to 4096 by default which uses only ~50-100MB of KV cache.
+   */
+  private numCtx: number;
+
+  /**
+   * Thread count — limits CPU cores to prevent thermal throttling on mobile.
+   * Mobile chips throttle aggressively under sustained load.
+   * Using 4 threads instead of all cores keeps the device cool and actually faster.
+   */
+  private numThread: number;
+
   constructor(host = 'http://localhost:11434', model = 'gemma4:e2b') {
     this.host = host.replace(/\/$/, '');
     this.model = model;
+
+    // Auto-detect mobile environment and apply optimized defaults
+    const isTermux = !!(process.env.TERMUX_VERSION || process.env.PREFIX?.includes('com.termux'));
+    const totalRAM = Math.round(totalmem() / 1024 / 1024 / 1024);
+
+    if (isTermux || totalRAM <= 16) {
+      // Mobile / low-RAM: small context, limited threads
+      this.numCtx = 4096;
+      this.numThread = 4;
+    } else {
+      // Desktop: larger context, more threads
+      this.numCtx = 8192;
+      this.numThread = 8;
+    }
   }
 
   /**
@@ -238,6 +268,8 @@ export class OllamaProvider implements AIProvider {
       options: {
         temperature: options.temperature ?? 0.7,
         num_predict: options.maxTokens ?? 4096,
+        num_ctx: this.numCtx,
+        num_thread: this.numThread,
       },
     };
 
@@ -297,6 +329,8 @@ export class OllamaProvider implements AIProvider {
       options: {
         temperature: options.temperature ?? 0.7,
         num_predict: options.maxTokens ?? 4096,
+        num_ctx: this.numCtx,
+        num_thread: this.numThread,
       },
     };
 
