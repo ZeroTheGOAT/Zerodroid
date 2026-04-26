@@ -43,19 +43,21 @@ export class OllamaProvider implements AIProvider {
     this.host = host.replace(/\/$/, '');
     this.model = model;
 
-    // Auto-detect mobile environment and apply optimized defaults
+    // Auto-detect mobile environment
     const isTermux = !!(process.env.TERMUX_VERSION || process.env.PREFIX?.includes('com.termux'));
     const totalRAM = Math.round(totalmem() / 1024 / 1024 / 1024);
 
     if (isTermux || totalRAM <= 16) {
-      // Mobile / low-RAM: small context, limited threads
+      // Mobile / low-RAM: limit context to prevent OOM crash
+      // Context window is the key — 128K default allocates GB of KV cache
       this.numCtx = 4096;
-      this.numThread = 4;
     } else {
-      // Desktop: larger context, more threads
+      // Desktop: larger context
       this.numCtx = 8192;
-      this.numThread = 8;
     }
+
+    // Use all CPU cores for max speed — no thread limit
+    this.numThread = 0; // 0 = Ollama auto-detects and uses all cores
   }
 
   /**

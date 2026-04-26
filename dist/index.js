@@ -853,11 +853,10 @@ var OllamaProvider = class {
     const totalRAM = Math.round(totalmem2() / 1024 / 1024 / 1024);
     if (isTermux2 || totalRAM <= 16) {
       this.numCtx = 4096;
-      this.numThread = 4;
     } else {
       this.numCtx = 8192;
-      this.numThread = 8;
     }
+    this.numThread = 0;
   }
   /**
    * Check if Ollama server is reachable
