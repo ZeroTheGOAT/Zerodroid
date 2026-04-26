@@ -4,6 +4,47 @@
 
 Build complete projects (websites, APIs, mobile apps, scripts) just by describing what you want. ZeroDroid writes the code, installs dependencies, runs commands, fixes errors, and manages your project — all from the terminal.
 
+---
+
+## 🚀 Install (One Command)
+
+### On Android (Termux)
+> Install [Termux from F-Droid](https://f-droid.org) first (NOT the Play Store), then run:
+```bash
+curl -fsSL https://raw.githubusercontent.com/ZeroTheGOAT/Zerodroid/main/install.sh | bash
+```
+That's it. This single command installs Node.js, Git, and ZeroDroid automatically.
+
+### On Linux / macOS / WSL
+```bash
+npm install -g github:ZeroTheGOAT/Zerodroid
+```
+
+### Already have npm?
+```bash
+npm install -g github:ZeroTheGOAT/Zerodroid
+```
+
+---
+
+## ⚡ Usage
+
+```bash
+# Set up your AI provider (one time)
+zerodroid config
+
+# Then just tell it what to build
+zerodroid "Create a React portfolio with dark mode"
+
+# Or start an interactive chat session
+zerodroid chat
+
+# Check your environment
+zerodroid setup
+```
+
+---
+
 ## ✨ Features
 
 - 🤖 **AI-powered coding agent** — describe what you want, ZeroDroid builds it
@@ -15,50 +56,6 @@ Build complete projects (websites, APIs, mobile apps, scripts) just by describin
 - 📱 **Works on Android** — runs in Termux, just like on a PC
 - 🌐 **Cross-platform** — Android (Termux), Linux, macOS, WSL, Windows
 
-## 🚀 Quick Start
-
-### Install
-
-```bash
-npm install -g zerodroid
-```
-
-### On Android (Termux)
-
-```bash
-# Install Termux from F-Droid (NOT Play Store)
-pkg install nodejs git -y
-npm install -g zerodroid
-zerodroid setup
-```
-
-### Configure
-
-```bash
-# Interactive setup (choose provider, set API key)
-zerodroid config
-
-# Or set directly
-zerodroid config --set provider=gemini
-zerodroid config --set gemini.apiKey=YOUR_KEY
-```
-
-### Use
-
-```bash
-# One-shot: describe what you want
-zerodroid "Create a React portfolio with dark mode and contact form"
-
-# Interactive chat mode
-zerodroid chat
-
-# Scaffold a project
-zerodroid init react my-app
-
-# Auto-install development tools
-zerodroid setup
-```
-
 ## 🤖 AI Providers
 
 | Provider | Internet | Cost | Setup |
@@ -69,51 +66,46 @@ zerodroid setup
 | **OpenAI** | ✅ Online | Paid | Coming in v0.2 |
 | **OpenRouter** | ✅ Online | Varies | Coming in v0.2 |
 
-## 📱 Android Setup (Termux)
+## 📴 Offline AI (No Internet Needed)
 
-1. Install **Termux** from [F-Droid](https://f-droid.org) (NOT the Play Store)
-2. Run:
-   ```bash
-   pkg update && pkg upgrade -y
-   pkg install nodejs git -y
-   npm install -g zerodroid
-   zerodroid setup
-   ```
-3. For offline AI:
-   ```bash
-   pkg install tur-repo
-   pkg install ollama
-   ollama serve &
-   ollama pull gemma4:e2b
-   zerodroid config --set provider=ollama
-   ```
+ZeroDroid can run completely offline on your Android phone using Ollama + Gemma 4:
+
+```bash
+# Install Ollama in Termux
+pkg install tur-repo
+pkg install ollama
+
+# Start it and download the model
+ollama serve &
+ollama pull gemma4:e2b
+
+# Tell ZeroDroid to use it
+zerodroid config --set provider=ollama
+```
 
 ## 🧠 Memory System
 
-ZeroDroid remembers everything:
+ZeroDroid remembers everything locally in `~/.zerodroid/memory/`:
 - **Project context** — tech stack, decisions, what was built
 - **Conversation history** — pick up where you left off
-- **User preferences** — your name, coding style, preferences
-
-All stored locally in `~/.zerodroid/memory/`.
+- **User preferences** — your name, coding style
 
 ## 📂 What Can ZeroDroid Build?
 
 Everything a developer can build from a terminal:
 - ✅ React / Next.js / Vue / Vite websites
 - ✅ Express / Flask / FastAPI / Django APIs
-- ✅ React Native + Expo mobile apps (APK via EAS Build)
+- ✅ React Native + Expo mobile apps
 - ✅ Python scripts and ML projects
 - ✅ CLI tools and npm packages
 - ✅ Full-stack applications
-- ✅ Static sites
 - ✅ Anything else
 
-## 🛠️ Development
+## 🛠️ Contributing
 
 ```bash
-git clone https://github.com/user/zerodroid
-cd zerodroid
+git clone https://github.com/ZeroTheGOAT/Zerodroid.git
+cd Zerodroid
 npm install
 npm run build
 node dist/index.js
