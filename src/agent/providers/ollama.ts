@@ -39,7 +39,7 @@ export class OllamaProvider implements AIProvider {
    */
   private numThread: number;
 
-  constructor(host = 'http://localhost:11434', model = 'gemma4:e2b') {
+  constructor(host = 'http://localhost:11434', model = 'qwen3.5:0.8b') {
     this.host = host.replace(/\/$/, '');
     this.model = model;
 

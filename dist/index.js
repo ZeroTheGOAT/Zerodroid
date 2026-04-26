@@ -140,7 +140,7 @@ var DEFAULT_CONFIG = {
   provider: "gemini",
   ollama: {
     host: "http://localhost:11434",
-    model: "gemma4:e2b"
+    model: "qwen3.5:0.8b"
   },
   gemini: {
     apiKey: "",
@@ -839,7 +839,7 @@ var OllamaProvider = class {
    * Using 4 threads instead of all cores keeps the device cool and actually faster.
    */
   numThread;
-  constructor(host = "http://localhost:11434", model = "gemma4:e2b") {
+  constructor(host = "http://localhost:11434", model = "qwen3.5:0.8b") {
     this.host = host.replace(/\/$/, "");
     this.model = model;
     const isTermux2 = !!(process.env.TERMUX_VERSION || process.env.PREFIX?.includes("com.termux"));

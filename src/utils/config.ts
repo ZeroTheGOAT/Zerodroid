@@ -58,7 +58,7 @@ const DEFAULT_CONFIG: ZeroDroidConfig = {
   provider: 'gemini',
   ollama: {
     host: 'http://localhost:11434',
-    model: 'gemma4:e2b',
+    model: 'qwen3.5:0.8b',
   },
   gemini: {
     apiKey: '',
