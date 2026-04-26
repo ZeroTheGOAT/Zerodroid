@@ -36,27 +36,62 @@ export function createCLI(): Command {
 
       const provider = createProvider(config, opts.model);
 
-      // Check if provider is available (Ollama auto-starts if needed)
+      // ─── Full Ollama lifecycle management ──────────────
       if (provider.name === 'ollama') {
+        const ollama = provider as import('../agent/providers/ollama.js').OllamaProvider;
+
+        // Step 1: Start ollama serve (auto, in background)
         log.info('Checking Ollama...');
-      }
-      const available = await provider.isAvailable();
-      if (!available) {
-        log.error(`Provider "${provider.name}" is not available.`);
-        if (provider.name === 'ollama') {
-          log.info('Ollama is not installed. Install it:');
+        const available = await ollama.isAvailable();
+        if (!available) {
+          log.error('Ollama is not installed.');
+          log.info('Install it with one of these commands:');
           log.dim('  Termux:  pkg install tur-repo && pkg install ollama');
           log.dim('  Linux:   curl -fsSL https://ollama.com/install.sh | sh');
           log.dim('  macOS:   brew install ollama');
           log.blank();
-          log.info('Then pull a model:  ollama pull gemma4:e2b');
-        } else {
-          log.info(`Make sure your API key is configured: zerodroid config`);
+          log.info('Then run "zerodroid" again — everything else is automatic.');
+          process.exit(1);
         }
-        process.exit(1);
-      }
-      if (provider.name === 'ollama') {
-        log.success('Ollama is running');
+        log.success('Ollama server running');
+
+        // Step 2: Check if model is downloaded, auto-pull if not
+        const hasModel = await ollama.hasModel();
+        if (!hasModel) {
+          const modelName = config.ollama.model;
+          log.warn(`Model "${modelName}" not found locally.`);
+          log.info(`Downloading ${modelName}... (this only happens once)`);
+          log.blank();
+
+          const pulled = await ollama.pullModel(undefined, (status, percent) => {
+            if (percent !== undefined) {
+              process.stdout.write(`\r  ⬇️  ${status} ${percent}%   `);
+            } else {
+              console.log(`  ⬇️  ${status}`);
+            }
+          });
+
+          if (pulled) {
+            console.log(''); // newline after progress
+            log.success(`Model "${modelName}" ready!`);
+          } else {
+            console.log('');
+            log.error(`Failed to download "${modelName}".`);
+            log.info('Try a smaller model:');
+            log.dim('  zerodroid config --set ollama.model=gemma3:1b');
+            process.exit(1);
+          }
+        } else {
+          log.success(`Model "${config.ollama.model}" ready`);
+        }
+      } else {
+        // Cloud providers — just check availability
+        const available = await provider.isAvailable();
+        if (!available) {
+          log.error(`Provider "${provider.name}" is not available.`);
+          log.info(`Make sure your API key is configured: zerodroid config`);
+          process.exit(1);
+        }
       }
 
       // Check for resume flags

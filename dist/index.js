@@ -770,6 +770,99 @@ var OllamaProvider = class {
     return false;
   }
   /**
+   * Check if a model is already downloaded locally
+   */
+  async hasModel(modelName) {
+    const name = modelName || this.model;
+    try {
+      const res = await fetch(`${this.host}/api/tags`);
+      if (!res.ok) return false;
+      const data = await res.json();
+      return data.models?.some((m) => m.name === name || m.name.startsWith(name.split(":")[0])) || false;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Pull (download) a model via the Ollama API
+   * No need for a second terminal — this uses the HTTP API directly!
+   * @param onProgress - Callback for download progress
+   */
+  async pullModel(modelName, onProgress) {
+    const name = modelName || this.model;
+    try {
+      const res = await fetch(`${this.host}/api/pull`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, stream: true })
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Failed to pull model: ${errText}`);
+      }
+      if (!res.body) {
+        throw new Error("No response body for pull stream");
+      }
+      const decoder = new TextDecoder();
+      const reader = res.body.getReader();
+      let lastPercent = -1;
+      try {
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const parsed = JSON.parse(line);
+              if (parsed.status && onProgress) {
+                let percent;
+                if (parsed.total && parsed.completed) {
+                  percent = Math.round(parsed.completed / parsed.total * 100);
+                  if (percent !== lastPercent && percent % 10 === 0) {
+                    lastPercent = percent;
+                    onProgress(parsed.status, percent);
+                  }
+                } else if (parsed.status !== "pulling manifest") {
+                  onProgress(parsed.status);
+                }
+              }
+            } catch {
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Ensure a model is available — auto-pull if missing
+   */
+  async ensureModel(onProgress) {
+    if (await this.hasModel()) return true;
+    return this.pullModel(void 0, onProgress);
+  }
+  /**
+   * List all locally available models
+   */
+  async listModels() {
+    try {
+      const res = await fetch(`${this.host}/api/tags`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.models?.map((m) => m.name) || [];
+    } catch {
+      return [];
+    }
+  }
+  /**
    * Check if Ollama is available — auto-starts it if not running
    */
   async isAvailable() {
@@ -1526,25 +1619,53 @@ function createCLI() {
     }
     const provider = createProvider(config, opts.model);
     if (provider.name === "ollama") {
+      const ollama = provider;
       log.info("Checking Ollama...");
-    }
-    const available = await provider.isAvailable();
-    if (!available) {
-      log.error(`Provider "${provider.name}" is not available.`);
-      if (provider.name === "ollama") {
-        log.info("Ollama is not installed. Install it:");
+      const available = await ollama.isAvailable();
+      if (!available) {
+        log.error("Ollama is not installed.");
+        log.info("Install it with one of these commands:");
         log.dim("  Termux:  pkg install tur-repo && pkg install ollama");
         log.dim("  Linux:   curl -fsSL https://ollama.com/install.sh | sh");
         log.dim("  macOS:   brew install ollama");
         log.blank();
-        log.info("Then pull a model:  ollama pull gemma4:e2b");
-      } else {
-        log.info(`Make sure your API key is configured: zerodroid config`);
+        log.info('Then run "zerodroid" again \u2014 everything else is automatic.');
+        process.exit(1);
       }
-      process.exit(1);
-    }
-    if (provider.name === "ollama") {
-      log.success("Ollama is running");
+      log.success("Ollama server running");
+      const hasModel = await ollama.hasModel();
+      if (!hasModel) {
+        const modelName = config.ollama.model;
+        log.warn(`Model "${modelName}" not found locally.`);
+        log.info(`Downloading ${modelName}... (this only happens once)`);
+        log.blank();
+        const pulled = await ollama.pullModel(void 0, (status, percent) => {
+          if (percent !== void 0) {
+            process.stdout.write(`\r  \u2B07\uFE0F  ${status} ${percent}%   `);
+          } else {
+            console.log(`  \u2B07\uFE0F  ${status}`);
+          }
+        });
+        if (pulled) {
+          console.log("");
+          log.success(`Model "${modelName}" ready!`);
+        } else {
+          console.log("");
+          log.error(`Failed to download "${modelName}".`);
+          log.info("Try a smaller model:");
+          log.dim("  zerodroid config --set ollama.model=gemma3:1b");
+          process.exit(1);
+        }
+      } else {
+        log.success(`Model "${config.ollama.model}" ready`);
+      }
+    } else {
+      const available = await provider.isAvailable();
+      if (!available) {
+        log.error(`Provider "${provider.name}" is not available.`);
+        log.info(`Make sure your API key is configured: zerodroid config`);
+        process.exit(1);
+      }
     }
     let resumeSession = void 0;
     if (opts.continue) {

@@ -100,9 +100,16 @@ fi
 echo ""
 echo -e "${GREEN}${BOLD}⚡ ZeroDroid installed successfully!${NC}"
 echo ""
-echo -e "  Run ${BOLD}zerodroid setup${NC}    to check your environment"
-echo -e "  Run ${BOLD}zerodroid config${NC}   to set up your AI provider"
-echo -e "  Run ${BOLD}zerodroid chat${NC}     to start coding"
+echo -e "  ${BOLD}Get started:${NC}"
+echo -e "    ${CYAN}zerodroid config${NC}   — Set up your AI provider (one time)"
+echo -e "    ${CYAN}zerodroid${NC}          — Start coding!"
 echo ""
-echo -e "  Or just run: ${CYAN}${BOLD}zerodroid \"Build me a React app\"${NC}"
+echo -e "  ${BOLD}For offline AI (optional):${NC}"
+if [ "$IS_TERMUX" = true ]; then
+echo -e "    ${CYAN}pkg install tur-repo && pkg install ollama${NC}"
+else
+echo -e "    ${CYAN}curl -fsSL https://ollama.com/install.sh | sh${NC}"
+fi
+echo -e "    Then run ${CYAN}zerodroid config --set provider=ollama${NC}"
+echo -e "    ZeroDroid auto-starts Ollama & downloads models for you!"
 echo ""

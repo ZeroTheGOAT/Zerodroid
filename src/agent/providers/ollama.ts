@@ -61,7 +61,7 @@ export class OllamaProvider implements AIProvider {
    * Auto-start Ollama server in the background if it's not running.
    * Waits up to 10 seconds for it to become ready.
    */
-  private async autoStart(): Promise<boolean> {
+  async autoStart(): Promise<boolean> {
     if (!this.ollamaInstalled()) {
       return false;
     }
@@ -83,6 +83,121 @@ export class OllamaProvider implements AIProvider {
     }
 
     return false;
+  }
+
+  /**
+   * Check if a model is already downloaded locally
+   */
+  async hasModel(modelName?: string): Promise<boolean> {
+    const name = modelName || this.model;
+    try {
+      const res = await fetch(`${this.host}/api/tags`);
+      if (!res.ok) return false;
+      const data = await res.json() as { models?: Array<{ name: string }> };
+      return data.models?.some((m) => m.name === name || m.name.startsWith(name.split(':')[0])) || false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Pull (download) a model via the Ollama API
+   * No need for a second terminal — this uses the HTTP API directly!
+   * @param onProgress - Callback for download progress
+   */
+  async pullModel(
+    modelName?: string,
+    onProgress?: (status: string, percent?: number) => void
+  ): Promise<boolean> {
+    const name = modelName || this.model;
+
+    try {
+      const res = await fetch(`${this.host}/api/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, stream: true }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Failed to pull model: ${errText}`);
+      }
+
+      if (!res.body) {
+        throw new Error('No response body for pull stream');
+      }
+
+      const decoder = new TextDecoder();
+      const reader = res.body.getReader();
+      let lastPercent = -1;
+
+      try {
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const parsed = JSON.parse(line) as {
+                status?: string;
+                completed?: number;
+                total?: number;
+              };
+
+              if (parsed.status && onProgress) {
+                let percent: number | undefined;
+                if (parsed.total && parsed.completed) {
+                  percent = Math.round((parsed.completed / parsed.total) * 100);
+                  // Only report at 10% intervals to avoid spam
+                  if (percent !== lastPercent && percent % 10 === 0) {
+                    lastPercent = percent;
+                    onProgress(parsed.status, percent);
+                  }
+                } else if (parsed.status !== 'pulling manifest') {
+                  onProgress(parsed.status);
+                }
+              }
+            } catch {
+              // Skip malformed JSON
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Ensure a model is available — auto-pull if missing
+   */
+  async ensureModel(onProgress?: (status: string, percent?: number) => void): Promise<boolean> {
+    if (await this.hasModel()) return true;
+    return this.pullModel(undefined, onProgress);
+  }
+
+  /**
+   * List all locally available models
+   */
+  async listModels(): Promise<string[]> {
+    try {
+      const res = await fetch(`${this.host}/api/tags`);
+      if (!res.ok) return [];
+      const data = await res.json() as { models?: Array<{ name: string }> };
+      return data.models?.map((m) => m.name) || [];
+    } catch {
+      return [];
+    }
   }
 
   /**
