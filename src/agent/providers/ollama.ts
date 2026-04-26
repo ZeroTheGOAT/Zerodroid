@@ -2,8 +2,12 @@
  * Ollama Provider — Local AI (Gemma 4 E2B, Llama, etc.)
  * Talks to Ollama at localhost:11434
  * Works offline on Android (Termux) and any machine with Ollama installed
+ *
+ * AUTO-START: If Ollama isn't running, ZeroDroid starts it automatically
+ * in the background — no second terminal needed.
  */
 
+import { spawn, execSync } from 'child_process';
 import type {
   AIProvider,
   CompletionOptions,
@@ -24,13 +28,72 @@ export class OllamaProvider implements AIProvider {
     this.model = model;
   }
 
-  async isAvailable(): Promise<boolean> {
+  /**
+   * Check if Ollama server is reachable
+   */
+  private async ping(): Promise<boolean> {
     try {
       const res = await fetch(`${this.host}/api/version`);
       return res.ok;
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Check if the `ollama` binary exists on this system
+   */
+  private ollamaInstalled(): boolean {
+    try {
+      execSync('which ollama', { stdio: 'ignore' });
+      return true;
+    } catch {
+      try {
+        execSync('where ollama', { stdio: 'ignore' });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  /**
+   * Auto-start Ollama server in the background if it's not running.
+   * Waits up to 10 seconds for it to become ready.
+   */
+  private async autoStart(): Promise<boolean> {
+    if (!this.ollamaInstalled()) {
+      return false;
+    }
+
+    // Spawn ollama serve detached so it persists even if ZeroDroid exits
+    const child = spawn('ollama', ['serve'], {
+      stdio: 'ignore',
+      detached: true,
+      shell: true,
+    });
+    child.unref();
+
+    // Wait for server to come online (up to 10 seconds)
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (await this.ping()) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if Ollama is available — auto-starts it if not running
+   */
+  async isAvailable(): Promise<boolean> {
+    // Already running? Great.
+    if (await this.ping()) return true;
+
+    // Not running — try to start it automatically
+    return this.autoStart();
   }
 
   private formatMessages(messages: Message[]): Array<{ role: string; content: string }> {

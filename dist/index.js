@@ -767,6 +767,7 @@ async function startChat(provider, cwd) {
 }
 
 // src/agent/providers/ollama.ts
+import { spawn as spawn2, execSync as execSync3 } from "child_process";
 var OllamaProvider = class {
   name = "ollama";
   host;
@@ -775,13 +776,61 @@ var OllamaProvider = class {
     this.host = host.replace(/\/$/, "");
     this.model = model;
   }
-  async isAvailable() {
+  /**
+   * Check if Ollama server is reachable
+   */
+  async ping() {
     try {
       const res = await fetch(`${this.host}/api/version`);
       return res.ok;
     } catch {
       return false;
     }
+  }
+  /**
+   * Check if the `ollama` binary exists on this system
+   */
+  ollamaInstalled() {
+    try {
+      execSync3("which ollama", { stdio: "ignore" });
+      return true;
+    } catch {
+      try {
+        execSync3("where ollama", { stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+  /**
+   * Auto-start Ollama server in the background if it's not running.
+   * Waits up to 10 seconds for it to become ready.
+   */
+  async autoStart() {
+    if (!this.ollamaInstalled()) {
+      return false;
+    }
+    const child = spawn2("ollama", ["serve"], {
+      stdio: "ignore",
+      detached: true,
+      shell: true
+    });
+    child.unref();
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (await this.ping()) {
+        return true;
+      }
+    }
+    return false;
+  }
+  /**
+   * Check if Ollama is available — auto-starts it if not running
+   */
+  async isAvailable() {
+    if (await this.ping()) return true;
+    return this.autoStart();
   }
   formatMessages(messages) {
     return messages.map((m) => ({
@@ -1116,15 +1165,26 @@ function createCLI() {
       config.provider = opts.provider;
     }
     const provider = createProvider(config, opts.model);
+    if (provider.name === "ollama") {
+      log.info("Checking Ollama...");
+    }
     const available = await provider.isAvailable();
     if (!available) {
       log.error(`Provider "${provider.name}" is not available.`);
       if (provider.name === "ollama") {
-        log.info("Make sure Ollama is running: ollama serve");
+        log.info("Ollama is not installed. Install it:");
+        log.dim("  Termux:  pkg install tur-repo && pkg install ollama");
+        log.dim("  Linux:   curl -fsSL https://ollama.com/install.sh | sh");
+        log.dim("  macOS:   brew install ollama");
+        log.blank();
+        log.info("Then pull a model:  ollama pull gemma4:e2b");
       } else {
         log.info(`Make sure your API key is configured: zerodroid config`);
       }
       process.exit(1);
+    }
+    if (provider.name === "ollama") {
+      log.success("Ollama is running");
     }
     const prompt = promptParts.join(" ");
     if (prompt) {

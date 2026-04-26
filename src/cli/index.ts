@@ -33,16 +33,27 @@ export function createCLI(): Command {
 
       const provider = createProvider(config, opts.model);
 
-      // Check if provider is available
+      // Check if provider is available (Ollama auto-starts if needed)
+      if (provider.name === 'ollama') {
+        log.info('Checking Ollama...');
+      }
       const available = await provider.isAvailable();
       if (!available) {
         log.error(`Provider "${provider.name}" is not available.`);
         if (provider.name === 'ollama') {
-          log.info('Make sure Ollama is running: ollama serve');
+          log.info('Ollama is not installed. Install it:');
+          log.dim('  Termux:  pkg install tur-repo && pkg install ollama');
+          log.dim('  Linux:   curl -fsSL https://ollama.com/install.sh | sh');
+          log.dim('  macOS:   brew install ollama');
+          log.blank();
+          log.info('Then pull a model:  ollama pull gemma4:e2b');
         } else {
           log.info(`Make sure your API key is configured: zerodroid config`);
         }
         process.exit(1);
+      }
+      if (provider.name === 'ollama') {
+        log.success('Ollama is running');
       }
 
       const prompt = promptParts.join(' ');
