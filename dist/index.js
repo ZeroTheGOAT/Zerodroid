@@ -262,23 +262,16 @@ ${toolInstructions}
 3. After writing code, run the appropriate install commands (npm install, pip install, etc.)
 4. If a command fails, read the error, fix the issue, and retry.
 5. Keep responses concise. Focus on actions, not explanations.
-6. When you create a web project, tell the user how to run it (the command and the URL).
-7. Create production-quality code with proper error handling, modern patterns, and clean structure.
-8. Use modern frameworks and best practices (React 19, Next.js 15, Vite 6, etc.)
-
-## File Structure Convention
-- Place projects in the current working directory
-- Use standard project structures for each framework
-- Always include a README.md with setup instructions
+6. When you create a web project, tell the user how to run it.
+7. Create production-quality code with proper error handling and modern patterns.
+8. NEVER add filler questions like "How can I help you?" or "What would you like to build?" \u2014 just respond naturally.
+9. Do NOT repeat yourself or add unnecessary closing sentences. When you're done, just stop.
 
 ${projectContext ? `## Project Context (from memory)
 ${projectContext}
 ` : ""}
 
-Respond in this format:
-1. Briefly state what you'll do (1-2 sentences max)
-2. Use tools to execute the plan
-3. Summarize what was done and next steps`;
+Be direct and concise. No fluff.`;
 }
 var TOOL_DEFINITIONS = [
   {
