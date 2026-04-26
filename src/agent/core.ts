@@ -25,6 +25,8 @@ export interface AgentOptions {
   provider: AIProvider;
   cwd: string;
   stream?: boolean;
+  /** Existing session messages to prepend (for conversation resuming) */
+  sessionMessages?: Message[];
 }
 
 function executeTool(name: string, args: Record<string, unknown>, cwd: string): string {
@@ -95,18 +97,31 @@ export async function runAgent(
   userPrompt: string,
   options: AgentOptions
 ): Promise<string> {
-  const { provider, cwd } = options;
+  const { provider, cwd, sessionMessages } = options;
   const config = loadConfig();
 
   // Load project context from memory
   const projectContext = getProjectContext(cwd);
 
-  // Build initial messages
+  // Build messages — include prior session history for context continuity
   const systemPrompt = getSystemPrompt(cwd, projectContext, config.userName);
   const messages: Message[] = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
   ];
+
+  // Add prior conversation history (for session resuming)
+  if (sessionMessages && sessionMessages.length > 0) {
+    // Only include user/assistant messages from history (skip old system/tool msgs)
+    const historyMsgs = sessionMessages.filter(
+      (m) => m.role === 'user' || m.role === 'assistant'
+    );
+    // Keep last 20 messages for context (to stay within token limits)
+    const recentHistory = historyMsgs.slice(-20);
+    messages.push(...recentHistory);
+  }
+
+  // Add the new user prompt
+  messages.push({ role: 'user', content: userPrompt });
 
   let iterations = 0;
   let finalResponse = '';

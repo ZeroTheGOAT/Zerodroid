@@ -1,6 +1,6 @@
 /**
  * ZeroDroid CLI — Command Registration
- * Handles all CLI commands: chat, setup, config, init, run
+ * Handles all CLI commands: chat, setup, config
  */
 
 import { Command } from 'commander';
@@ -11,6 +11,7 @@ import { startChat } from './chat.js';
 import { runAgent } from '../agent/core.js';
 import { createProvider } from './provider-factory.js';
 import { shellExec } from '../agent/tools/shell-exec.js';
+import { getLastSession, listSessions, loadSession } from '../sessions/manager.js';
 
 export function createCLI(): Command {
   const program = new Command();
@@ -21,8 +22,10 @@ export function createCLI(): Command {
     .version('0.1.0')
     .option('-p, --provider <provider>', 'AI provider (ollama, gemini, claude, openai, openrouter)')
     .option('-m, --model <model>', 'Model name to use')
+    .option('-c, --continue', 'Resume the most recent conversation')
+    .option('--resume <id>', 'Resume a specific conversation by ID')
     .argument('[prompt...]', 'Direct prompt to execute')
-    .action(async (promptParts: string[], opts: { provider?: string; model?: string }) => {
+    .action(async (promptParts: string[], opts: { provider?: string; model?: string; continue?: boolean; resume?: string }) => {
       const config = loadConfig();
       const cwd = process.cwd();
 
@@ -56,6 +59,24 @@ export function createCLI(): Command {
         log.success('Ollama is running');
       }
 
+      // Check for resume flags
+      let resumeSession = undefined;
+      if (opts.continue) {
+        resumeSession = getLastSession() || undefined;
+        if (resumeSession) {
+          log.info(`Resuming: ${resumeSession.title}`);
+        }
+      } else if (opts.resume) {
+        const sessions = listSessions(50);
+        const match = sessions.find((s) => s.id === opts.resume || s.id.startsWith(opts.resume!));
+        if (match) {
+          resumeSession = match;
+          log.info(`Resuming: ${match.title}`);
+        } else {
+          log.warn(`Session not found: ${opts.resume}`);
+        }
+      }
+
       const prompt = promptParts.join(' ');
 
       if (prompt) {
@@ -63,11 +84,15 @@ export function createCLI(): Command {
         log.brand('ZeroDroid');
         log.dim(`Provider: ${provider.name} | Working in: ${cwd}`);
         log.divider();
-        await runAgent(prompt, { provider, cwd });
+        await runAgent(prompt, {
+          provider,
+          cwd,
+          sessionMessages: resumeSession?.messages,
+        });
         log.blank();
       } else {
         // Interactive chat mode
-        await startChat(provider, cwd);
+        await startChat(provider, cwd, resumeSession);
       }
     });
 
@@ -75,7 +100,8 @@ export function createCLI(): Command {
   program
     .command('chat')
     .description('Start interactive chat mode')
-    .action(async () => {
+    .option('-c, --continue', 'Resume the most recent conversation')
+    .action(async (opts: { continue?: boolean }) => {
       const config = loadConfig();
       const provider = createProvider(config);
       const cwd = process.cwd();
@@ -86,7 +112,38 @@ export function createCLI(): Command {
         process.exit(1);
       }
 
-      await startChat(provider, cwd);
+      let resumeSession = undefined;
+      if (opts.continue) {
+        resumeSession = getLastSession() || undefined;
+      }
+
+      await startChat(provider, cwd, resumeSession);
+    });
+
+  // ─── zerodroid history ───────────────────────────────
+  program
+    .command('history')
+    .description('List past conversations')
+    .action(() => {
+      const sessions = listSessions(20);
+      if (sessions.length === 0) {
+        log.info('No past conversations yet.');
+        return;
+      }
+
+      log.brand('ZeroDroid — Conversation History');
+      log.blank();
+
+      for (const s of sessions) {
+        const time = new Date(s.updatedAt).toLocaleString();
+        const turns = `${s.turns} turn${s.turns !== 1 ? 's' : ''}`;
+        log.dim(`  ${s.id}`);
+        console.log(`  ${s.title}`);
+        log.dim(`  ${turns} · ${s.provider} · ${time}`);
+        log.blank();
+      }
+
+      log.dim('Resume with: zerodroid --continue  or  zerodroid --resume <id>');
     });
 
   // ─── zerodroid setup ─────────────────────────────────

@@ -618,14 +618,21 @@ function processToolCalls(toolCalls, cwd) {
   return toolMessages;
 }
 async function runAgent(userPrompt, options) {
-  const { provider, cwd } = options;
+  const { provider, cwd, sessionMessages } = options;
   const config = loadConfig();
   const projectContext = getProjectContext(cwd);
   const systemPrompt = getSystemPrompt(cwd, projectContext, config.userName);
   const messages = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userPrompt }
+    { role: "system", content: systemPrompt }
   ];
+  if (sessionMessages && sessionMessages.length > 0) {
+    const historyMsgs = sessionMessages.filter(
+      (m) => m.role === "user" || m.role === "assistant"
+    );
+    const recentHistory = historyMsgs.slice(-20);
+    messages.push(...recentHistory);
+  }
+  messages.push({ role: "user", content: userPrompt });
   let iterations = 0;
   let finalResponse = "";
   while (iterations < MAX_TOOL_ITERATIONS) {
@@ -701,69 +708,6 @@ function detectTechStack(messages, memory) {
       memory.techStack.push(tech);
     }
   }
-}
-
-// src/cli/chat.ts
-async function startChat(provider, cwd) {
-  log.blank();
-  log.brand("ZeroDroid \u2014 AI Coding Agent");
-  log.dim(`Provider: ${provider.name} | Working in: ${cwd}`);
-  log.dim('Type your request, or "exit" to quit. Use "clear" to reset context.');
-  log.divider();
-  log.blank();
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: "\x1B[38;2;0;229;255m\u276F \x1B[0m"
-  });
-  rl.prompt();
-  rl.on("line", async (line) => {
-    const input = line.trim();
-    if (!input) {
-      rl.prompt();
-      return;
-    }
-    if (input.toLowerCase() === "exit" || input.toLowerCase() === "quit") {
-      log.blank();
-      log.brand("See you later! \u{1F44B}");
-      process.exit(0);
-    }
-    if (input.toLowerCase() === "clear") {
-      console.clear();
-      log.brand("Context cleared.");
-      log.blank();
-      rl.prompt();
-      return;
-    }
-    if (input.toLowerCase() === "help") {
-      log.blank();
-      log.info("Commands:");
-      log.dim("  exit / quit    \u2014 Exit ZeroDroid");
-      log.dim("  clear          \u2014 Clear the screen");
-      log.dim("  help           \u2014 Show this help");
-      log.dim("");
-      log.info("Usage:");
-      log.dim("  Just type what you want to build or do!");
-      log.dim('  Example: "Create a React portfolio with dark mode"');
-      log.dim('  Example: "Fix the bug in server.js"');
-      log.dim('  Example: "Add authentication to this Express app"');
-      log.blank();
-      rl.prompt();
-      return;
-    }
-    try {
-      await runAgent(input, { provider, cwd });
-    } catch (err) {
-      log.error(`Error: ${err.message}`);
-    }
-    log.blank();
-    rl.prompt();
-  });
-  rl.on("close", () => {
-    log.blank();
-    log.brand("See you later! \u{1F44B}");
-    process.exit(0);
-  });
 }
 
 // src/agent/providers/ollama.ts
@@ -1155,10 +1099,426 @@ function createProvider(config, modelOverride) {
   }
 }
 
+// src/sessions/manager.ts
+import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync4, readdirSync as readdirSync2, unlinkSync } from "fs";
+import { join as join4 } from "path";
+function getSessionsDir() {
+  return join4(getConfigDir(), "sessions");
+}
+function ensureSessionsDir() {
+  const dir = getSessionsDir();
+  if (!existsSync7(dir)) {
+    mkdirSync4(dir, { recursive: true });
+  }
+}
+function sessionPath(id) {
+  return join4(getSessionsDir(), `${id}.json`);
+}
+function generateId() {
+  const now = /* @__PURE__ */ new Date();
+  const date = now.toISOString().slice(0, 10).replace(/-/g, "");
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${date}_${rand}`;
+}
+function generateTitle(firstMessage) {
+  let title = firstMessage.replace(/\n/g, " ").trim();
+  if (title.length > 60) {
+    title = title.slice(0, 60);
+    const lastSpace = title.lastIndexOf(" ");
+    if (lastSpace > 30) {
+      title = title.slice(0, lastSpace);
+    }
+    title += "...";
+  }
+  return title;
+}
+function createSession(provider, model, cwd) {
+  ensureSessionsDir();
+  const session = {
+    id: generateId(),
+    title: "New conversation",
+    provider,
+    model,
+    cwd,
+    messages: [],
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    turns: 0
+  };
+  saveSession(session);
+  return session;
+}
+function saveSession(session) {
+  ensureSessionsDir();
+  session.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  writeFileSync4(sessionPath(session.id), JSON.stringify(session, null, 2), "utf-8");
+}
+function listSessions(limit = 20) {
+  ensureSessionsDir();
+  const dir = getSessionsDir();
+  const files = readdirSync2(dir).filter((f) => f.endsWith(".json"));
+  const sessions = [];
+  for (const file of files) {
+    try {
+      const data = JSON.parse(readFileSync4(join4(dir, file), "utf-8"));
+      sessions.push(data);
+    } catch {
+    }
+  }
+  sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return sessions.slice(0, limit);
+}
+function getLastSession() {
+  const sessions = listSessions(1);
+  return sessions.length > 0 ? sessions[0] : null;
+}
+function addTurn(session, userMessage, assistantMessage) {
+  if (session.turns === 0) {
+    session.title = generateTitle(userMessage);
+  }
+  session.messages.push({ role: "user", content: userMessage });
+  session.messages.push({ role: "assistant", content: assistantMessage });
+  session.turns++;
+  if (session.messages.length > 200) {
+    const systemMsgs = session.messages.filter((m) => m.role === "system");
+    const recentMsgs = session.messages.slice(-100);
+    session.messages = [...systemMsgs, ...recentMsgs];
+  }
+  saveSession(session);
+}
+function timeAgo(dateStr) {
+  const date = new Date(dateStr);
+  const now = /* @__PURE__ */ new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 6e4);
+  const diffHours = Math.floor(diffMs / 36e5);
+  const diffDays = Math.floor(diffMs / 864e5);
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
+// src/cli/chat.ts
+function showBanner(state) {
+  log.blank();
+  console.log("\x1B[38;2;0;229;255m\x1B[1m");
+  console.log("  \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557");
+  console.log("  \u2551         \u26A1 Z E R O D R O I D          \u2551");
+  console.log("  \u2551       AI Coding Agent v0.1.0          \u2551");
+  console.log("  \u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D");
+  console.log("\x1B[0m");
+  log.dim(`  Provider: ${state.session.provider} (${state.session.model})`);
+  log.dim(`  Session:  ${state.session.title}`);
+  log.dim(`  Working:  ${state.cwd}`);
+  log.blank();
+  log.dim("  Type what you want to build, or /help for commands");
+  log.divider();
+  log.blank();
+}
+function showHelp() {
+  log.blank();
+  console.log("\x1B[1m  Commands:\x1B[0m");
+  log.dim("  /new                Start a new conversation");
+  log.dim("  /history            List past conversations");
+  log.dim("  /continue           Resume most recent conversation");
+  log.dim("  /resume <id>        Resume a specific conversation");
+  log.dim("  /model <name>       Switch model (e.g., /model gemma4:e2b)");
+  log.dim("  /provider <name>    Switch provider (ollama, gemini, etc.)");
+  log.dim("  /status             Show current session info");
+  log.dim("  /compact            Summarize conversation to save context");
+  log.dim("  /clear              Clear screen");
+  log.dim("  /exit               Quit ZeroDroid");
+  log.blank();
+  console.log("\x1B[1m  Usage:\x1B[0m");
+  log.dim("  Just type what you want in plain English!");
+  log.dim('  "Create a React portfolio with dark mode"');
+  log.dim('  "Fix the bug in server.js"');
+  log.dim('  "Add authentication to this Express app"');
+  log.blank();
+}
+function showHistory() {
+  const sessions = listSessions(15);
+  if (sessions.length === 0) {
+    log.info("No past conversations found.");
+    return;
+  }
+  log.blank();
+  console.log("\x1B[1m  Past Conversations:\x1B[0m");
+  log.blank();
+  for (const s of sessions) {
+    const time = timeAgo(s.updatedAt);
+    const turns = `${s.turns} turn${s.turns !== 1 ? "s" : ""}`;
+    const id = `\x1B[2m${s.id}\x1B[0m`;
+    const title = s.title;
+    const provider = `\x1B[2m[${s.provider}]\x1B[0m`;
+    console.log(`  ${id}  ${title}`);
+    log.dim(`  ${"".padEnd(s.id.length)}  ${turns} \xB7 ${time} \xB7 ${s.provider}`);
+    log.blank();
+  }
+  log.dim("  Resume with: /resume <id>  or  /continue (most recent)");
+  log.blank();
+}
+function showStatus(state) {
+  log.blank();
+  console.log("\x1B[1m  Session Status:\x1B[0m");
+  log.dim(`  ID:        ${state.session.id}`);
+  log.dim(`  Title:     ${state.session.title}`);
+  log.dim(`  Provider:  ${state.session.provider}`);
+  log.dim(`  Model:     ${state.session.model}`);
+  log.dim(`  Turns:     ${state.session.turns}`);
+  log.dim(`  Messages:  ${state.session.messages.length}`);
+  log.dim(`  Directory: ${state.cwd}`);
+  log.dim(`  Created:   ${timeAgo(state.session.createdAt)}`);
+  log.dim(`  Updated:   ${timeAgo(state.session.updatedAt)}`);
+  log.blank();
+}
+async function handleSlashCommand(input, state) {
+  const parts = input.slice(1).split(/\s+/);
+  const cmd = parts[0].toLowerCase();
+  const arg = parts.slice(1).join(" ");
+  switch (cmd) {
+    case "help":
+    case "h":
+    case "?": {
+      showHelp();
+      return true;
+    }
+    case "exit":
+    case "quit":
+    case "q": {
+      log.blank();
+      log.brand("See you later! \u{1F44B}");
+      log.dim(`Session saved: ${state.session.id}`);
+      process.exit(0);
+    }
+    case "clear":
+    case "cls": {
+      console.clear();
+      showBanner(state);
+      return true;
+    }
+    case "new":
+    case "n": {
+      saveSession(state.session);
+      const config = loadConfig();
+      state.session = createSession(
+        config.provider,
+        config[config.provider] && typeof config[config.provider] === "object" ? config[config.provider].model || state.session.model : state.session.model,
+        state.cwd
+      );
+      log.success("Started new conversation");
+      log.dim(`Session: ${state.session.id}`);
+      log.blank();
+      return true;
+    }
+    case "history":
+    case "ls": {
+      showHistory();
+      return true;
+    }
+    case "continue":
+    case "c": {
+      const last = getLastSession();
+      if (!last) {
+        log.info("No previous sessions found.");
+        return true;
+      }
+      state.session = last;
+      const config = loadConfig();
+      config.provider = last.provider;
+      state.provider = createProvider(config);
+      state.cwd = last.cwd;
+      log.success(`Resumed: ${last.title}`);
+      log.dim(`${last.turns} turns \xB7 ${last.provider} (${last.model})`);
+      log.blank();
+      return true;
+    }
+    case "resume":
+    case "r": {
+      if (!arg) {
+        log.error("Usage: /resume <session-id>");
+        log.dim("Use /history to see available sessions");
+        return true;
+      }
+      const sessions = listSessions(50);
+      const match = sessions.find((s) => s.id === arg || s.id.startsWith(arg));
+      if (!match) {
+        log.error(`Session not found: ${arg}`);
+        log.dim("Use /history to see available sessions");
+        return true;
+      }
+      state.session = match;
+      const config = loadConfig();
+      config.provider = match.provider;
+      state.provider = createProvider(config);
+      state.cwd = match.cwd;
+      log.success(`Resumed: ${match.title}`);
+      log.dim(`${match.turns} turns \xB7 ${match.provider} (${match.model})`);
+      log.blank();
+      return true;
+    }
+    case "model":
+    case "m": {
+      if (!arg) {
+        log.info(`Current model: ${state.session.model}`);
+        log.dim("Usage: /model <model-name>");
+        log.dim("Examples: /model gemma4:e2b, /model gemini-2.5-flash");
+        return true;
+      }
+      state.session.model = arg;
+      const config = loadConfig();
+      const providerConfig = config[config.provider];
+      if (providerConfig && typeof providerConfig === "object" && "model" in providerConfig) {
+        providerConfig.model = arg;
+      }
+      saveConfig(config);
+      state.provider = createProvider(config);
+      log.success(`Model switched to: ${arg}`);
+      saveSession(state.session);
+      return true;
+    }
+    case "provider":
+    case "p": {
+      if (!arg) {
+        log.info(`Current provider: ${state.session.provider}`);
+        log.dim("Available: ollama, gemini, claude, openai, openrouter");
+        return true;
+      }
+      const validProviders = ["ollama", "gemini", "claude", "openai", "openrouter"];
+      if (!validProviders.includes(arg)) {
+        log.error(`Unknown provider: ${arg}`);
+        log.dim(`Available: ${validProviders.join(", ")}`);
+        return true;
+      }
+      const config = loadConfig();
+      config.provider = arg;
+      saveConfig(config);
+      try {
+        state.provider = createProvider(config);
+        state.session.provider = arg;
+        const providerConfig = config[arg];
+        if (providerConfig && typeof providerConfig === "object" && "model" in providerConfig) {
+          state.session.model = providerConfig.model;
+        }
+        if (state.provider.name === "ollama") {
+          log.info("Starting Ollama...");
+        }
+        const available = await state.provider.isAvailable();
+        if (!available) {
+          log.error(`Provider "${arg}" is not available.`);
+          if (arg === "ollama") {
+            log.dim("Install Ollama: pkg install tur-repo && pkg install ollama");
+            log.dim("Then pull a model: ollama pull gemma4:e2b");
+          } else {
+            log.dim(`Set API key: zerodroid config --set ${arg}.apiKey=YOUR_KEY`);
+          }
+          return true;
+        }
+        log.success(`Switched to ${arg} (${state.session.model})`);
+        saveSession(state.session);
+      } catch (err) {
+        log.error(err.message);
+      }
+      return true;
+    }
+    case "status":
+    case "s": {
+      showStatus(state);
+      return true;
+    }
+    case "compact": {
+      if (state.session.messages.length < 10) {
+        log.info("Conversation is already short, no need to compact.");
+        return true;
+      }
+      const systemMsgs = state.session.messages.filter((m) => m.role === "system");
+      const recentMsgs = state.session.messages.slice(-10);
+      state.session.messages = [...systemMsgs, ...recentMsgs];
+      saveSession(state.session);
+      log.success(`Compacted to ${state.session.messages.length} messages`);
+      return true;
+    }
+    default: {
+      log.error(`Unknown command: /${cmd}`);
+      log.dim("Type /help for available commands");
+      return true;
+    }
+  }
+}
+function getPrompt(state) {
+  const provider = state.session.provider;
+  const model = state.session.model;
+  const shortModel = model.length > 20 ? model.slice(0, 20) + "\u2026" : model;
+  return `\x1B[2m${provider}:${shortModel}\x1B[0m \x1B[38;2;0;229;255m\u276F\x1B[0m `;
+}
+async function startChat(provider, cwd, resumeSession) {
+  const config = loadConfig();
+  let session;
+  if (resumeSession) {
+    session = resumeSession;
+  } else {
+    session = createSession(
+      config.provider,
+      config[config.provider] && typeof config[config.provider] === "object" ? config[config.provider].model || "unknown" : "unknown",
+      cwd
+    );
+  }
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: ""
+  });
+  const state = { provider, session, cwd, rl };
+  showBanner(state);
+  if (resumeSession && resumeSession.turns > 0) {
+    log.info(`Resumed conversation: ${resumeSession.title}`);
+    log.dim(`${resumeSession.turns} turns \xB7 started ${timeAgo(resumeSession.createdAt)}`);
+    log.blank();
+  }
+  rl.setPrompt(getPrompt(state));
+  rl.prompt();
+  rl.on("line", async (line) => {
+    const input = line.trim();
+    if (!input) {
+      rl.setPrompt(getPrompt(state));
+      rl.prompt();
+      return;
+    }
+    if (input.startsWith("/")) {
+      await handleSlashCommand(input, state);
+      rl.setPrompt(getPrompt(state));
+      rl.prompt();
+      return;
+    }
+    try {
+      const response = await runAgent(input, {
+        provider: state.provider,
+        cwd: state.cwd,
+        sessionMessages: state.session.messages
+      });
+      addTurn(state.session, input, response);
+    } catch (err) {
+      log.error(`Error: ${err.message}`);
+    }
+    log.blank();
+    rl.setPrompt(getPrompt(state));
+    rl.prompt();
+  });
+  rl.on("close", () => {
+    saveSession(state.session);
+    log.blank();
+    log.brand("See you later! \u{1F44B}");
+    log.dim(`Session saved: ${state.session.id}`);
+    process.exit(0);
+  });
+}
+
 // src/cli/index.ts
 function createCLI() {
   const program2 = new Command();
-  program2.name("zerodroid").description("\u26A1 ZeroDroid \u2014 Open-source AI coding agent. Vibe code anywhere.").version("0.1.0").option("-p, --provider <provider>", "AI provider (ollama, gemini, claude, openai, openrouter)").option("-m, --model <model>", "Model name to use").argument("[prompt...]", "Direct prompt to execute").action(async (promptParts, opts) => {
+  program2.name("zerodroid").description("\u26A1 ZeroDroid \u2014 Open-source AI coding agent. Vibe code anywhere.").version("0.1.0").option("-p, --provider <provider>", "AI provider (ollama, gemini, claude, openai, openrouter)").option("-m, --model <model>", "Model name to use").option("-c, --continue", "Resume the most recent conversation").option("--resume <id>", "Resume a specific conversation by ID").argument("[prompt...]", "Direct prompt to execute").action(async (promptParts, opts) => {
     const config = loadConfig();
     const cwd = process.cwd();
     if (opts.provider) {
@@ -1186,18 +1546,38 @@ function createCLI() {
     if (provider.name === "ollama") {
       log.success("Ollama is running");
     }
+    let resumeSession = void 0;
+    if (opts.continue) {
+      resumeSession = getLastSession() || void 0;
+      if (resumeSession) {
+        log.info(`Resuming: ${resumeSession.title}`);
+      }
+    } else if (opts.resume) {
+      const sessions = listSessions(50);
+      const match = sessions.find((s) => s.id === opts.resume || s.id.startsWith(opts.resume));
+      if (match) {
+        resumeSession = match;
+        log.info(`Resuming: ${match.title}`);
+      } else {
+        log.warn(`Session not found: ${opts.resume}`);
+      }
+    }
     const prompt = promptParts.join(" ");
     if (prompt) {
       log.brand("ZeroDroid");
       log.dim(`Provider: ${provider.name} | Working in: ${cwd}`);
       log.divider();
-      await runAgent(prompt, { provider, cwd });
+      await runAgent(prompt, {
+        provider,
+        cwd,
+        sessionMessages: resumeSession?.messages
+      });
       log.blank();
     } else {
-      await startChat(provider, cwd);
+      await startChat(provider, cwd, resumeSession);
     }
   });
-  program2.command("chat").description("Start interactive chat mode").action(async () => {
+  program2.command("chat").description("Start interactive chat mode").option("-c, --continue", "Resume the most recent conversation").action(async (opts) => {
     const config = loadConfig();
     const provider = createProvider(config);
     const cwd = process.cwd();
@@ -1206,7 +1586,29 @@ function createCLI() {
       log.error(`Provider "${provider.name}" is not available.`);
       process.exit(1);
     }
-    await startChat(provider, cwd);
+    let resumeSession = void 0;
+    if (opts.continue) {
+      resumeSession = getLastSession() || void 0;
+    }
+    await startChat(provider, cwd, resumeSession);
+  });
+  program2.command("history").description("List past conversations").action(() => {
+    const sessions = listSessions(20);
+    if (sessions.length === 0) {
+      log.info("No past conversations yet.");
+      return;
+    }
+    log.brand("ZeroDroid \u2014 Conversation History");
+    log.blank();
+    for (const s of sessions) {
+      const time = new Date(s.updatedAt).toLocaleString();
+      const turns = `${s.turns} turn${s.turns !== 1 ? "s" : ""}`;
+      log.dim(`  ${s.id}`);
+      console.log(`  ${s.title}`);
+      log.dim(`  ${turns} \xB7 ${s.provider} \xB7 ${time}`);
+      log.blank();
+    }
+    log.dim("Resume with: zerodroid --continue  or  zerodroid --resume <id>");
   });
   program2.command("setup").description("Auto-install development tools (Node.js, Python, Git)").action(async () => {
     log.brand("ZeroDroid Setup");
