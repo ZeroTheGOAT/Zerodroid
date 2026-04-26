@@ -67,25 +67,75 @@ if ! command -v git &> /dev/null; then
   fi
 fi
 
+# ─── Remove old installation if exists ───────────────
+if command -v zerodroid &> /dev/null; then
+  echo -e "${YELLOW}Removing old ZeroDroid installation...${NC}"
+  npm uninstall -g zerodroid 2>/dev/null || true
+fi
+
 # ─── Install ZeroDroid ───────────────────────────────
 echo ""
 echo -e "${CYAN}Installing ZeroDroid...${NC}"
 
-npm install -g github:ZeroTheGOAT/Zerodroid 2>/dev/null || {
-  # Fallback: clone and install manually
-  echo -e "${YELLOW}npm global install from GitHub failed, trying clone method...${NC}"
-  TMPDIR="${TMPDIR:-/tmp}"
-  INSTALL_DIR="$TMPDIR/zerodroid-install"
-  rm -rf "$INSTALL_DIR"
-  git clone --depth 1 https://github.com/ZeroTheGOAT/Zerodroid.git "$INSTALL_DIR"
-  cd "$INSTALL_DIR"
-  npm install
-  npm run build
-  npm pack > /dev/null
-  npm install -g *.tgz
-  cd - > /dev/null
-  rm -rf "$INSTALL_DIR"
-}
+# Clone to a temp directory, build, pack, and install the tarball globally
+# This is the most reliable method across all platforms including Termux
+TMPDIR_BASE="${TMPDIR:-/tmp}"
+INSTALL_DIR="$TMPDIR_BASE/zerodroid-install-$$"
+rm -rf "$INSTALL_DIR"
+
+git clone --depth 1 https://github.com/ZeroTheGOAT/Zerodroid.git "$INSTALL_DIR" 2>/dev/null
+
+cd "$INSTALL_DIR"
+npm install --ignore-scripts 2>/dev/null
+npm run build 2>/dev/null
+
+# Pack into a tarball and install globally from that
+# This copies files instead of symlinking, so it survives cleanup
+TARBALL=$(npm pack 2>/dev/null | tail -1)
+npm install -g "$TARBALL" 2>/dev/null
+
+cd - > /dev/null
+rm -rf "$INSTALL_DIR"
+
+# ─── Verify installation ─────────────────────────────
+if ! command -v zerodroid &> /dev/null; then
+  echo -e "${YELLOW}Binary not found in PATH, creating link manually...${NC}"
+
+  # Find where npm puts global packages
+  NPM_BIN="$(npm config get prefix)/bin"
+  NPM_GLOBAL_DIR="$(npm root -g)"
+
+  # Find the actual zerodroid.js entry point
+  ZERODROID_BIN="$NPM_GLOBAL_DIR/zerodroid/bin/zerodroid.js"
+
+  if [ -f "$ZERODROID_BIN" ]; then
+    chmod +x "$ZERODROID_BIN"
+    ln -sf "$ZERODROID_BIN" "$NPM_BIN/zerodroid" 2>/dev/null || true
+
+    # On Termux, also try linking to $PREFIX/bin
+    if [ "$IS_TERMUX" = true ] && [ -d "$PREFIX/bin" ]; then
+      ln -sf "$ZERODROID_BIN" "$PREFIX/bin/zerodroid" 2>/dev/null || true
+    fi
+  fi
+
+  # Final fallback: create a wrapper script
+  if ! command -v zerodroid &> /dev/null; then
+    WRAPPER_DIR="$HOME/.local/bin"
+    mkdir -p "$WRAPPER_DIR"
+    cat > "$WRAPPER_DIR/zerodroid" << 'WRAPPER'
+#!/usr/bin/env node
+import("$(npm root -g)/zerodroid/dist/index.js");
+WRAPPER
+    chmod +x "$WRAPPER_DIR/zerodroid"
+
+    # Add to PATH if not already there
+    if [[ ":$PATH:" != *":$WRAPPER_DIR:"* ]]; then
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+      export PATH="$HOME/.local/bin:$PATH"
+      echo -e "${YELLOW}Added ~/.local/bin to PATH (restart terminal or run: source ~/.bashrc)${NC}"
+    fi
+  fi
+fi
 
 # ─── Setup storage on Termux ─────────────────────────
 if [ "$IS_TERMUX" = true ]; then
@@ -96,20 +146,29 @@ if [ "$IS_TERMUX" = true ]; then
   fi
 fi
 
-# ─── Done! ────────────────────────────────────────────
+# ─── Verify it works ─────────────────────────────────
 echo ""
-echo -e "${GREEN}${BOLD}⚡ ZeroDroid installed successfully!${NC}"
-echo ""
-echo -e "  ${BOLD}Get started:${NC}"
-echo -e "    ${CYAN}zerodroid config${NC}   — Set up your AI provider (one time)"
-echo -e "    ${CYAN}zerodroid${NC}          — Start coding!"
-echo ""
-echo -e "  ${BOLD}For offline AI (optional):${NC}"
-if [ "$IS_TERMUX" = true ]; then
-echo -e "    ${CYAN}pkg install tur-repo && pkg install ollama${NC}"
+if command -v zerodroid &> /dev/null; then
+  echo -e "${GREEN}${BOLD}⚡ ZeroDroid installed successfully!${NC}"
+  echo ""
+  echo -e "  ${BOLD}Get started:${NC}"
+  echo -e "    ${CYAN}zerodroid config${NC}   — Set up your AI provider (one time)"
+  echo -e "    ${CYAN}zerodroid${NC}          — Start coding!"
+  echo ""
+  echo -e "  ${BOLD}For offline AI (optional):${NC}"
+  if [ "$IS_TERMUX" = true ]; then
+    echo -e "    ${CYAN}pkg install tur-repo && pkg install ollama${NC}"
+  else
+    echo -e "    ${CYAN}curl -fsSL https://ollama.com/install.sh | sh${NC}"
+  fi
+  echo -e "    Then run ${CYAN}zerodroid config --set provider=ollama${NC}"
+  echo -e "    ZeroDroid auto-starts Ollama & downloads models for you!"
+  echo ""
 else
-echo -e "    ${CYAN}curl -fsSL https://ollama.com/install.sh | sh${NC}"
+  echo -e "${RED}${BOLD}Installation completed but 'zerodroid' command not found.${NC}"
+  echo -e "${YELLOW}Try running manually:${NC}"
+  echo -e "  ${CYAN}node $(npm root -g)/zerodroid/dist/index.js${NC}"
+  echo ""
+  echo -e "Or restart your terminal and try: ${CYAN}zerodroid${NC}"
+  echo ""
 fi
-echo -e "    Then run ${CYAN}zerodroid config --set provider=ollama${NC}"
-echo -e "    ZeroDroid auto-starts Ollama & downloads models for you!"
-echo ""
