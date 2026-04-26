@@ -1,0 +1,253 @@
+/**
+ * ZeroDroid CLI — Command Registration
+ * Handles all CLI commands: chat, setup, config, init, run
+ */
+
+import { Command } from 'commander';
+import { log } from '../utils/logger.js';
+import { loadConfig, saveConfig, type ZeroDroidConfig } from '../utils/config.js';
+import { detectEnvironment } from '../utils/detect-env.js';
+import { startChat } from './chat.js';
+import { runAgent } from '../agent/core.js';
+import { createProvider } from './provider-factory.js';
+import { shellExec } from '../agent/tools/shell-exec.js';
+
+export function createCLI(): Command {
+  const program = new Command();
+
+  program
+    .name('zerodroid')
+    .description('⚡ ZeroDroid — Open-source AI coding agent. Vibe code anywhere.')
+    .version('0.1.0')
+    .option('-p, --provider <provider>', 'AI provider (ollama, gemini, claude, openai, openrouter)')
+    .option('-m, --model <model>', 'Model name to use')
+    .argument('[prompt...]', 'Direct prompt to execute')
+    .action(async (promptParts: string[], opts: { provider?: string; model?: string }) => {
+      const config = loadConfig();
+      const cwd = process.cwd();
+
+      // Override provider from CLI flag
+      if (opts.provider) {
+        config.provider = opts.provider as ZeroDroidConfig['provider'];
+      }
+
+      const provider = createProvider(config, opts.model);
+
+      // Check if provider is available
+      const available = await provider.isAvailable();
+      if (!available) {
+        log.error(`Provider "${provider.name}" is not available.`);
+        if (provider.name === 'ollama') {
+          log.info('Make sure Ollama is running: ollama serve');
+        } else {
+          log.info(`Make sure your API key is configured: zerodroid config`);
+        }
+        process.exit(1);
+      }
+
+      const prompt = promptParts.join(' ');
+
+      if (prompt) {
+        // One-shot mode: execute the prompt and exit
+        log.brand('ZeroDroid');
+        log.dim(`Provider: ${provider.name} | Working in: ${cwd}`);
+        log.divider();
+        await runAgent(prompt, { provider, cwd });
+        log.blank();
+      } else {
+        // Interactive chat mode
+        await startChat(provider, cwd);
+      }
+    });
+
+  // ─── zerodroid chat ──────────────────────────────────
+  program
+    .command('chat')
+    .description('Start interactive chat mode')
+    .action(async () => {
+      const config = loadConfig();
+      const provider = createProvider(config);
+      const cwd = process.cwd();
+
+      const available = await provider.isAvailable();
+      if (!available) {
+        log.error(`Provider "${provider.name}" is not available.`);
+        process.exit(1);
+      }
+
+      await startChat(provider, cwd);
+    });
+
+  // ─── zerodroid setup ─────────────────────────────────
+  program
+    .command('setup')
+    .description('Auto-install development tools (Node.js, Python, Git)')
+    .action(async () => {
+      log.brand('ZeroDroid Setup');
+      log.blank();
+
+      const env = detectEnvironment();
+      log.info(`Environment: ${env.env}`);
+      log.info(`Architecture: ${env.arch} (${env.is64bit ? '64-bit' : '32-bit'})`);
+      log.info(`RAM: ${env.totalRAM} GB`);
+      log.info(`Shell: ${env.shell}`);
+      log.blank();
+
+      log.info('Checking tools...');
+      log.dim(`  Node.js: ${env.hasNode ? '✅ installed' : '❌ missing'}`);
+      log.dim(`  Python:  ${env.hasPython ? '✅ installed' : '❌ missing'}`);
+      log.dim(`  Git:     ${env.hasGit ? '✅ installed' : '❌ missing'}`);
+      log.dim(`  Ollama:  ${env.hasOllama ? '✅ installed' : '❌ not installed (optional for offline AI)'}`);
+      log.blank();
+
+      if (env.env === 'termux') {
+        if (!env.hasNode) {
+          log.step('Installing', 'Node.js...');
+          shellExec('pkg install nodejs -y', process.cwd(), 120_000);
+        }
+        if (!env.hasPython) {
+          log.step('Installing', 'Python...');
+          shellExec('pkg install python -y', process.cwd(), 120_000);
+        }
+        if (!env.hasGit) {
+          log.step('Installing', 'Git...');
+          shellExec('pkg install git -y', process.cwd(), 120_000);
+        }
+        if (!env.termuxStorage) {
+          log.step('Setting up', 'storage access...');
+          log.info('Please grant storage permission when prompted.');
+          shellExec('termux-setup-storage', process.cwd(), 30_000);
+        }
+      } else if (env.env === 'linux' || env.env === 'wsl') {
+        if (!env.hasNode) {
+          log.step('Installing', 'Node.js...');
+          shellExec('sudo apt install -y nodejs npm', process.cwd(), 120_000);
+        }
+        if (!env.hasPython) {
+          log.step('Installing', 'Python...');
+          shellExec('sudo apt install -y python3 python3-pip', process.cwd(), 120_000);
+        }
+        if (!env.hasGit) {
+          log.step('Installing', 'Git...');
+          shellExec('sudo apt install -y git', process.cwd(), 120_000);
+        }
+      } else if (env.env === 'macos') {
+        log.info('On macOS, use Homebrew to install missing tools:');
+        if (!env.hasNode) log.dim('  brew install node');
+        if (!env.hasPython) log.dim('  brew install python3');
+        if (!env.hasGit) log.dim('  brew install git');
+      } else {
+        log.info('On Windows, please install tools manually or use winget/scoop.');
+      }
+
+      log.blank();
+      log.success('Setup complete!');
+      log.info('Run "zerodroid config" to set up your AI provider.');
+    });
+
+  // ─── zerodroid config ────────────────────────────────
+  program
+    .command('config')
+    .description('Configure AI provider and API keys')
+    .option('--set <key=value>', 'Set a config value')
+    .option('--show', 'Show current config')
+    .action(async (opts: { set?: string; show?: boolean }) => {
+      const config = loadConfig();
+
+      if (opts.show) {
+        log.brand('ZeroDroid Config');
+        log.blank();
+        // Redact API keys for display
+        const display = { ...config };
+        if (display.gemini.apiKey) display.gemini.apiKey = '***' + display.gemini.apiKey.slice(-4);
+        if (display.claude.apiKey) display.claude.apiKey = '***' + display.claude.apiKey.slice(-4);
+        if (display.openai.apiKey) display.openai.apiKey = '***' + display.openai.apiKey.slice(-4);
+        if (display.openrouter.apiKey) display.openrouter.apiKey = '***' + display.openrouter.apiKey.slice(-4);
+        console.log(JSON.stringify(display, null, 2));
+        return;
+      }
+
+      if (opts.set) {
+        const [key, ...valueParts] = opts.set.split('=');
+        const value = valueParts.join('=');
+
+        // Support dotted keys like gemini.apiKey
+        const keys = key.split('.');
+        let target: Record<string, unknown> = config as unknown as Record<string, unknown>;
+
+        for (let i = 0; i < keys.length - 1; i++) {
+          target = target[keys[i]] as Record<string, unknown>;
+        }
+
+        target[keys[keys.length - 1]] = value;
+        saveConfig(config);
+        log.success(`Set ${key} = ${key.includes('apiKey') ? '***' : value}`);
+        return;
+      }
+
+      // Interactive config using inquirer
+      const inquirer = await import('inquirer');
+
+      const answers = await inquirer.default.prompt([
+        {
+          type: 'list',
+          name: 'provider',
+          message: 'Select AI provider:',
+          choices: [
+            { name: '🔒 Ollama (Local/Offline — free)', value: 'ollama' },
+            { name: '☁️  Gemini (Google — free tier)', value: 'gemini' },
+            { name: '☁️  Claude (Anthropic — paid)', value: 'claude' },
+            { name: '☁️  OpenAI (GPT — paid)', value: 'openai' },
+            { name: '☁️  OpenRouter (Any model)', value: 'openrouter' },
+          ],
+          default: config.provider,
+        },
+      ]);
+
+      config.provider = answers.provider;
+
+      if (answers.provider !== 'ollama') {
+        const keyAnswer = await inquirer.default.prompt([
+          {
+            type: 'password',
+            name: 'apiKey',
+            message: `Enter your ${answers.provider} API key:`,
+            mask: '*',
+          },
+        ]);
+
+        const providerConfig = config[answers.provider as keyof typeof config] as { apiKey: string };
+        if (providerConfig && typeof providerConfig === 'object') {
+          providerConfig.apiKey = keyAnswer.apiKey;
+        }
+      } else {
+        const ollamaAnswer = await inquirer.default.prompt([
+          {
+            type: 'input',
+            name: 'model',
+            message: 'Ollama model name:',
+            default: config.ollama.model,
+          },
+        ]);
+        config.ollama.model = ollamaAnswer.model;
+      }
+
+      // Ask for user name
+      const nameAnswer = await inquirer.default.prompt([
+        {
+          type: 'input',
+          name: 'userName',
+          message: 'Your name (so ZeroDroid can address you):',
+          default: config.userName || '',
+        },
+      ]);
+      config.userName = nameAnswer.userName;
+
+      saveConfig(config);
+      log.blank();
+      log.success('Config saved!');
+      log.info('Run "zerodroid" to start coding.');
+    });
+
+  return program;
+}
