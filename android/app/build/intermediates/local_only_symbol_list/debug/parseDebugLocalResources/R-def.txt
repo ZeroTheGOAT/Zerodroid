@@ -1,6 +1,0 @@
-R_DEF: Internal format may change without notice
-local
-string app_name
-style Theme.ZeroDroid
-xml file_paths
-xml shortcuts
