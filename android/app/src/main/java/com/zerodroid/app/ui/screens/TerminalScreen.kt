@@ -28,6 +28,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zerodroid.app.terminal.ProcessManager
+import com.zerodroid.app.ui.components.ExtraKeysBar
+import com.zerodroid.app.ui.components.ExtraKeyType
 import com.zerodroid.app.ui.theme.*
 import com.zerodroid.app.ui.viewmodel.TerminalViewModel
 
@@ -200,44 +202,91 @@ fun TerminalScreen(viewModel: TerminalViewModel) {
             }
         }
 
+        // ─── Extra Keys Bar (Termux-style) ──────
+        ExtraKeysBar(
+            onKeyPress = { key, modifiers ->
+                when {
+                    // Ctrl+C interrupt
+                    modifiers.ctrl && key.value.equals("c", ignoreCase = true) -> {
+                        viewModel.interruptProcess()
+                    }
+                    // Ctrl+L clear
+                    modifiers.ctrl && key.value.equals("l", ignoreCase = true) -> {
+                        viewModel.updateInput("clear"); viewModel.executeCommand()
+                    }
+                    // Ctrl+Z suspend (show as text)
+                    modifiers.ctrl && key.value.equals("z", ignoreCase = true) -> {
+                        viewModel.interruptProcess()
+                    }
+                    // Tab — trigger completion
+                    key.type == ExtraKeyType.ACTION && key.label == "Tab" -> {
+                        if (completions.isNotEmpty()) viewModel.applyCompletion(completions.first())
+                        else viewModel.updateInput(input + "\t")
+                    }
+                    // Esc — clear input
+                    key.type == ExtraKeyType.ACTION && key.label == "Esc" -> {
+                        viewModel.updateInput("")
+                    }
+                    // Enter — execute
+                    key.type == ExtraKeyType.ACTION && key.label == "Enter" -> {
+                        viewModel.executeCommand()
+                    }
+                    // Arrow up/down — history
+                    key.type == ExtraKeyType.ARROW && key.label == "↑" -> { viewModel.historyUp() }
+                    key.type == ExtraKeyType.ARROW && key.label == "↓" -> { viewModel.historyDown() }
+                    // Arrow left/right — cursor (append text for now)
+                    key.type == ExtraKeyType.ARROW -> { /* cursor movement handled by text field */ }
+                    // Del / Backspace
+                    key.label == "Del" || key.label == "Backspace" -> {
+                        val current = input
+                        if (current.isNotEmpty()) viewModel.updateInput(current.dropLast(1))
+                    }
+                    // Paste
+                    key.label == "Paste" -> {
+                        // Clipboard paste handled by the system
+                    }
+                    // F-keys, navigation keys — append escape sequence
+                    key.type == ExtraKeyType.FUNCTION || key.type == ExtraKeyType.NAVIGATION -> {
+                        // These would be sent to a PTY in a full terminal emulator
+                        // For now, show as text
+                    }
+                    // Normal character keys (/, *, -, +, |, \, ~, etc.)
+                    key.type == ExtraKeyType.NORMAL -> {
+                        val char = if (modifiers.shift) key.value.uppercase() else key.value
+                        viewModel.updateInput(input + char)
+                    }
+                }
+            },
+        )
+
         // ─── Input Bar ──────────────────────────
         Surface(color = Surface, shadowElevation = 8.dp) {
-            Row(modifier = Modifier.fillMaxWidth().padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text("❯", color = Primary, fontFamily = FontFamily.Monospace, fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 8.dp))
-                // History
-                IconButton(onClick = { viewModel.historyUp() }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Filled.KeyboardArrowUp, "Up", tint = TextDim, modifier = Modifier.size(16.dp)) }
-                IconButton(onClick = { viewModel.historyDown() }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Filled.KeyboardArrowDown, "Down", tint = TextDim, modifier = Modifier.size(16.dp)) }
-                // Tab key
-                IconButton(onClick = {
-                    if (completions.isNotEmpty()) viewModel.applyCompletion(completions.first())
-                }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Filled.KeyboardTab, "Tab", tint = TextDim, modifier = Modifier.size(16.dp)) }
+                    fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
 
                 // Input field
-                Box(modifier = Modifier.weight(1f).heightIn(min = 36.dp).clip(RoundedCornerShape(8.dp))
-                    .background(CodeBackground).padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    if (input.isEmpty()) Text("$ command...", color = TextDim, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                Box(modifier = Modifier.weight(1f).heightIn(min = 34.dp).clip(RoundedCornerShape(8.dp))
+                    .background(CodeBackground).padding(horizontal = 10.dp, vertical = 7.dp)) {
+                    if (input.isEmpty()) Text("$ command...", color = TextDim, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                     BasicTextField(value = input, onValueChange = { viewModel.updateInput(it) },
-                        textStyle = TextStyle(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
+                        textStyle = TextStyle(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
                         cursorBrush = SolidColor(Primary), modifier = Modifier.fillMaxWidth(), singleLine = true)
                 }
 
                 // Ctrl+C / Send
                 if (isRunning) {
                     IconButton(onClick = { viewModel.interruptProcess() },
-                        modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(Error.copy(alpha = 0.2f))) {
+                        modifier = Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)).background(Error.copy(alpha = 0.2f))) {
                         Text("^C", color = Error, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 } else {
                     IconButton(onClick = { viewModel.executeCommand() }, enabled = input.isNotBlank(),
-                        modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
+                        modifier = Modifier.size(34.dp).clip(RoundedCornerShape(8.dp))
                             .background(if (input.isNotBlank()) Primary else SurfaceContainer)) {
                         Icon(Icons.AutoMirrored.Filled.Send, "Run", tint = if (input.isNotBlank()) Color.White else TextDim,
-                            modifier = Modifier.size(18.dp))
+                            modifier = Modifier.size(16.dp))
                     }
                 }
             }
